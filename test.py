@@ -101,10 +101,6 @@ def equals(object1: Any, object2: Any, ignore: Any=None) -> bool:
     return True
 
 
-def cca(number1: float, number2: float) -> bool:
-    return 1 - number1 / number2 < 0.999
-
-
 def get_dom_node(dom: Any, path: str) -> Any:
     path_parts = path.split('/')
     result = dom
@@ -1808,23 +1804,16 @@ class GPXTests(mod_unittest.TestCase):
         gpx = parser.parse()
         gpx.to_xml()
 
-    def test_location_delta(self) -> None:
-        location = mod_geo.Location(-20, -50)
+    def test_location_delta_all_comb(self) -> None:
+        for lat in range(0, 90, 5):
+            for dist in range(1, 6):
+                self.__test_location_delta(mod_geo.Location(lat, 0), 10**dist)
 
-        location_2 = location + mod_geo.LocationDelta(angle=45, distance=100)
-        self.assertTrue(cca(location_2.latitude - location.latitude, location_2.longitude - location.longitude))
-
-    def test_location_equator_delta_distance_111120(self) -> None:
-        self.__test_location_delta(mod_geo.Location(0, 13), 111120)
-
-    def test_location_equator_delta_distance_50(self) -> None:
-        self.__test_location_delta(mod_geo.Location(0, -50), 50)
-
-    def test_location_nonequator_delta_distance_111120(self) -> None:
-        self.__test_location_delta(mod_geo.Location(45, 13), 111120)
-
-    def test_location_nonequator_delta_distance_50(self) -> None:
-        self.__test_location_delta(mod_geo.Location(-20, -50), 50)
+    def test_location_delta_with_circle(self) -> None:
+        for dist in range(1, 6):
+            self.__test_location_delta(mod_geo.Location(0,0), 10**dist)
+        self.__test_location_delta(mod_geo.Location(20, 50), 1000)
+        self.__test_location_delta(mod_geo.Location(-70, 20), 100)
 
     def test_delta_add_and_move(self) -> None:
         location = mod_geo.Location(45.1, 13.2)
@@ -1832,33 +1821,48 @@ class GPXTests(mod_unittest.TestCase):
         location_2 = location + delta
         location.move(delta)
 
-        self.assertTrue(cca(location.latitude, location_2.latitude))
-        self.assertTrue(cca(location.longitude, location_2.longitude))
+        self.assertAlmostEqual(location.latitude, location_2.latitude)
+        self.assertAlmostEqual(location.longitude, location_2.longitude)
 
     def test_parse_gpx_with_node_with_comments(self) -> None:
         with open('test_files/gpx-with-node-with-comments.gpx') as f:
             self.assertTrue(mod_gpxpy.parse(f))
 
-    def __test_location_delta(self, location: mod_geo.Location, distance: float) -> None:
-        angles = [ x * 15 for x in range(int(360 / 15)) ]
-        print(angles)
-
-        previous_location = None
+    def __test_location_delta(self, location: mod_geo.Location, distance: float, test_circle=False) -> None:
+        angles = [x * 15 for x in range(int(360 / 15))]
 
         distances_between_points: List[float] = []
+        # Determine how much the results can differ relatively (arbitrary values but they do the job).
+        # More extreme distances/latitudes allow greater differences.
+        if 10 ** 5 <= distance:
+            diff = 0.01
+        elif 10 ** 4 <= distance < 10 ** 5:
+            diff = 0.001
+        else:
+            diff = 0.00001
+        if location.latitude > 70:
+            diff *= 2
+        if location.latitude > 80:
+            diff *= 2
 
+        previous_location = None
         for angle in angles:
             new_location = location + mod_geo.LocationDelta(angle=angle, distance=distance)
             # All locations same distance from center
-            self.assertTrue(cca(location.distance_2d(new_location), distance)) # type: ignore
+            self.assertAlmostEqual(location.distance_2d(new_location), distance, delta=distance*diff)
             if previous_location:
                 distances_between_points.append(new_location.distance_2d(previous_location))
             previous_location = new_location
 
-        print(distances_between_points)
-        # All points should be equidistant on a circle:
-        for i in range(1, len(distances_between_points)):
-            self.assertTrue(cca(distances_between_points[0], distances_between_points[i]))
+        # All points on the circle should be almost equidistant, the further from the equator or the greater the
+        # given distance, the larger the difference becomes.
+        # Points on the circle closer to the equator are spread out more -> larger distance between adjacent points.
+        # Points on the circle closer to the poles are squeezed together -> smaller distance between adjacent points.
+        # Only check this for modest situations since otherwise errors will become too large.
+        if test_circle:
+            for i in range(1, len(distances_between_points)):
+                self.assertAlmostEqual(distances_between_points[0], distances_between_points[i],
+                                       delta=max(distances_between_points)*diff)
 
     def test_gpx_10_fields(self) -> None:
         """ Test (de) serialization all gpx1.0 fields """
